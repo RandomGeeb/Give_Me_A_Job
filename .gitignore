@@ -1,0 +1,18 @@
+# Personal data: never commit
+/profile.yaml
+/documents/
+/data/
+.env
+.env.*
+!.env.example
+*.db
+# Python
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+# Frontend
+node_modules/
+frontend/dist/
+*.tsbuildinfo
+.DS_Store

@@ -1,0 +1,13 @@
+@page{size:A4;margin:13mm 15mm}
+*{box-sizing:border-box;margin:0;padding:0}
+body{font:var(--s)/1.32 "Helvetica Neue",Arial,sans-serif;color:#111}
+h1{font-size:1.9em;letter-spacing:-.01em}
+.c{color:#333;margin:.15em 0 .5em;font-size:.94em}
+h2{font-size:.95em;text-transform:uppercase;letter-spacing:.07em;border-bottom:.7pt solid #444;margin:.75em 0 .35em;padding-bottom:.1em}
+.e{margin-bottom:.5em;break-inside:avoid}
+.r{display:flex;justify-content:space-between;gap:1em}
+.r span{white-space:nowrap;color:#333}
+.o{color:#333;font-style:italic}
+ul{padding-left:1.25em}
+li{margin-top:.08em}
+.s{margin-top:.1em}
