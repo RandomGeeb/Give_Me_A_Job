@@ -13,10 +13,14 @@
 <div class=field-wrapper><label for=dob>Date of birth*</label><input id=dob required></div>
 <div class=field-wrapper><label><input type=checkbox name=consent required>I agree to the privacy policy</label></div>
 <div class=field-wrapper><label for=resume>Resume/CV</label><input type=file id=resume></div>
+<div><span><span id=up_label>Resume</span></span><label for=up></label><label id=up_desc for=up>Choose file</label><input data-ui=resume id=up type=file tabindex=-1 aria-labelledby="up_label up_desc" required></div>
+<fieldset role=radiogroup aria-labelledby=lr_label><span id=lr_label>Free all summer?</span><div role=radio aria-checked=false><label><input type=radio name=lazy value=true required><span>YES</span></label></div><div role=radio aria-checked=false><label><input type=radio name=lazy value=false required><span>NO</span></label></div></fieldset>
 <input name=honeypot style="position:absolute;left:-9999px"><textarea name=g-recaptcha-response></textarea>
 <button id=go type=submit>Submit</button></form>
 <script>
-window.submits=0;f.addEventListener('submit',e=>{e.preventDefault();window.submits++});
+window.submits=0;
+// Like a controlled React radio: the click is undone, then shown a moment later. A real mouse click lands on a cover.
+document.querySelectorAll('[name=lazy]').forEach(r=>r.addEventListener('click',e=>{e.preventDefault();if(!e.isTrusted)setTimeout(()=>{r.checked=true},250)}));f.addEventListener('submit',e=>{e.preventDefault();window.submits++});
 const i=deg,l=document.getElementById('deg-list'),O=["Bachelor's Degree","Master's Degree"];
 const show=()=>{l.hidden=false;l.innerHTML='';O.filter(o=>o.toLowerCase().includes(i.value.toLowerCase())).forEach(o=>{const d=document.createElement('div');d.role='option';d.textContent=o;d.onclick=()=>{i.value=o;l.hidden=true};l.append(d)})};
 i.onclick=show;i.oninput=show;i.onkeydown=e=>{if(e.key=='Escape')l.hidden=true};

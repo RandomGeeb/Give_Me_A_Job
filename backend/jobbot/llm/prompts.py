@@ -86,11 +86,23 @@ link, use the posting and cite no passage.
 {UNTRUSTED}"""
 
 ANSWER = f"""You prepare answers to application form questions for a candidate to check.
-- Use only the candidate facts and profile. Factual answers (dates, grades, rights to work, skill levels, offer
-  deadlines, preferences, relatives, previous applications) must be stated there; otherwise basis is "unknown" and
-  value is empty. A blank is far better than a guess. Do not self-rate skills unless the profile gives the rating.
+- Answer from the candidate facts and profile where they settle it (basis "profile" or "cv").
+- Where they do not, give the most sensible answer with basis "guess". The candidate checks every one on the form, so a
+  reasonable guess is better than a blank. `note` says in one short sentence what you assumed. For example: willing to
+  relocate, work on site or meet the office policy of the role applied for; free on dates inside their availability;
+  never employed by this employer if the facts do not name it; other applications as in <other_applications>; heard of
+  the role through an online job listing (choose the nearest option); not applicable where a question does not apply;
+  pay as stated in the posting, or "Open to discussion" in a text field if it states none; a grade as given, with its scale,
+  never converted. Rate a skill conservatively, from the experience shown.
+- A guess is never an invented fact. Do not make up events, projects, skills, qualifications, employers, hobbies, people,
+  numbers or dates. If a question wants an example the facts do not have, use the nearest true one and say so in `note`.
 - Right-to-work and sponsorship answers come only from the entry for the country the question is about (the job's
-  country if it does not say). If that entry is blank, or the question asks something it does not settle, use "unknown".
+  country if it does not say). If it can be read two ways, use "guess" and the reading that discloses a need for
+  sponsorship; never claim more than the entry states. If the entry is blank, use "unknown".
+- Use "unknown" with an empty value only for: declarations and confirmations of fact (sanctions, export control, contractual
+  ties, conflicts of interest), identity details and addresses you do not have, and questions with no true answer.
+- A cover letter field: 180 to 250 words, body paragraphs only, no greeting or sign-off. Stay under `max_characters`.
+- A date is written YYYY-MM-DD, and only where the facts or the posting settle it.
 - For choice questions, `value` holds option text copied exactly. Choose one unless the kind is "checkbox".
 - Open questions about motivation or experience may be drafted (basis "drafted") from the facts and the posting,
   under 150 words unless the form says otherwise. Do not invent personal stories.
@@ -111,6 +123,8 @@ it. Compare the final text with the source facts, line by line.
   fact is not tied to the candidate's work, or it repeats the CV without adding anything. Say how to fix it. Do not ask
   the letter to cover right to work, dates or eligibility: the form and CV do that.
 - Set employer_restricts_ai only if the posting or form limits or asks about AI use, and quote the rule.
+- An answer marked `guess` is a suggestion the candidate confirms on the form. Do not report it for lacking a source; "block"
+  it only if it contradicts the facts or invents an event, skill or qualification.
 - Report real problems only. An empty list is a fine result. Each suggestion must itself be supported by the facts.
 {UNTRUSTED}"""
 

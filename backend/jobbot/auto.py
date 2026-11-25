@@ -11,7 +11,7 @@ from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
 from datetime import date
 
-from . import costs, db, pipeline, scoring
+from . import costs, db, limits, pipeline, scoring
 from .cv import reuse
 from .cv.parse import context
 from .llm import client, prompts
@@ -162,7 +162,12 @@ def candidates(con) -> tuple[list[dict], int, int, list[dict]]:
     cap, today = db.settings(con)["max_per_company"], date.today().isoformat()
     rows = [db.row(r) for r in con.execute("""SELECT id,company,title,locations,description,status,tier,triage,score,deadline,length(description) n FROM jobs
         WHERE tier IN (1,2,3) AND status IN ('discovered','scored','shortlisted')""")]
-    used = Counter(db.norm(r["company"]) for r in con.execute("SELECT company,status FROM jobs") if r["status"] in BUSY)
+    emp = limits.employers(con)
+    sent = {a["id"] for e in emp.values() for a in e["applied"]}
+    # Yours: everything sent or under way. Theirs: what still counts towards the employer's own limit.
+    busy = Counter(limits.key(r["company"], r["id"]) for r in con.execute("SELECT id,company,status FROM jobs") if r["status"] in BUSY and r["status"] != "withdrawn" and r["id"] not in sent)
+    used = Counter({k: len(e["applied"]) + busy[k] for k, e in emp.items()})
+    room = {k: min(cap - used[k], e["left"] - busy[k] if e["limit"] else cap) for k, e in emp.items()}
     cov = lambda r: (r["score"] or {}).get("coverage") or (r["triage"] or {}).get("coverage") or 0
     rows.sort(key=lambda r: (r["tier"], r["deadline"] or "9999", -cov(r)))
     queue, held, bare, twins = [], 0, 0, []
@@ -171,17 +176,17 @@ def candidates(con) -> tuple[list[dict], int, int, list[dict]]:
         if j["status"] in BUSY:
             taken.setdefault(db.norm(j["title"]), []).append(db.row(j))
     for r in rows:
-        k, title = db.norm(r["company"]), db.norm(r["title"])
+        k, title = limits.key(r["company"], r["id"]), db.norm(r["title"])
         if r["deadline"] and r["deadline"][:10] < today:
             continue
         if (r["n"] or 0) <= 200:
             bare += 1
         elif r["status"] != "shortlisted" and (twin := next((x for x in taken.get(title, []) if reuse.same_listing(r, x)), None)):
             twins.append({"id": r["id"], "company": r["company"], "title": r["title"], "twin": twin["company"]})
-        elif used[k] >= cap:
+        elif room[k] <= 0:
             held += 1
         else:
-            used[k] += 1
+            room[k] -= 1
             queue.append(r)
             taken.setdefault(title, []).append(r)
     return queue, held, bare, twins

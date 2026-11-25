@@ -20,21 +20,24 @@ each country. Choose countries and role types under Limits.
 
 1. **Discover**: press *Find new roles*, score them, shortlist. *Add by URL* takes anything seen elsewhere.
 2. **Auto-tailor**: rates every role 1 (best chance) to 4 (out of scope), then shortlists and tailors 1, 2 and 3 in that
-   order, soonest deadline first. Each role gets a full score before any tailoring, and can move tier. It respects your limit
-   per company, waits when a plan limit is near, carries on after a restart, and stops at review. Change a rating on Discover
+   order, soonest deadline first. Each role gets a full score before any tailoring, and can move tier. It respects your cap
+   per employer and any limit the employer states (see the Applied page), waits when a plan limit is near, carries on after a restart, and stops at review. Change a rating on Discover
    and it stays changed. To do one by hand instead:
 3. **Tailor**: rewrites your CV from confirmed facts only. Code blocks unsupported numbers, names, tools and ownership
    verbs, then an independent AI review runs.
 4. **Review**: compare the changes, edit, approve. Any later edit cancels the approval.
-5. **Open form**, then **Fill this page**. Green is your data, amber is AI-written, red needs you. Tick declarations and
-   submit yourself, then set the status to Submitted.
+5. **Fill application** opens the form and goes through its pages, stopping where something needs you and always before
+   Submit. Sign in, or press the form's Next yourself, and it carries on. **Fill this page** does just one page. If the form lives at another address, paste it
+   under **Use a different link**. Green is your data, yellow is AI-written (dashed means a guess), grey is being
+   written, red needs you. Questions first seen on the form are answered there and then, so check every yellow field. Anything
+   you change on the form is kept if you fill again. Tick declarations and submit yourself, then set the status to Submitted.
 6. Update outcomes on **Pipeline**. **Insights** adjusts likelihoods as they arrive.
 
 `uv run jobbot discover` searches once. `uv run jobbot schedule on` searches daily at 08:00.
 
 ## Good to know
 
-- **Filling can send data before you submit.** Ashby saves each field as it is typed, and a CV can upload when attached.
+- **Filling can send data before you submit.** Ashby saves each field as it is typed, Workday saves each page as a draft, and a CV can upload when attached.
 - Likelihoods start as editable guesses. They are labelled that way until 30 applications have an outcome. No reply
   after 60 days counts as no interview.
 - CV facts, study details, work rights, reusable answers and drafted text go to Claude through your own Claude Code
@@ -46,7 +49,8 @@ each country. Choose countries and role types under Limits.
 - A CV already written for a similar role is reused when it shows at least 75% of what the advert asks for that your facts can
   answer (change it on Profile; 0 always writes a new one). It still goes through every check and the AI review, which can
   send it back. *Tailor again* writes a new one. The same role listed under two company names is queued once.
-- LinkedIn and Indeed are not automated. Workday, Oracle and similar sites need you to sign in; filling there is best effort.
+- LinkedIn and Indeed are not automated. Workday and similar sites need you to sign in. The app only presses Next where the page
+  shows that more steps follow; elsewhere you press it and the next page fills by itself.
 - **Search the web** (Discover) uses Claude to find employers' own pages, starting with the role types you have fewest of.
   It is limited to 20 Claude calls per run by default.
   It reads a page only where robots.txt and the site allow it, so sites with bot protection are skipped, and job

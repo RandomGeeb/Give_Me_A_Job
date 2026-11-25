@@ -1,7 +1,9 @@
 import { createRoot } from 'react-dom/client'
 import { BrowserRouter, Link, NavLink, Route, Routes } from 'react-router-dom'
 import { Job, useApi } from './api'
+import { Logo } from './components/Logo'
 import { PlanUse, Usage } from './components/ui'
+import Applied from './pages/Applied'
 import Auto from './pages/Auto'
 import Discover from './pages/Discover'
 import Insights from './pages/Insights'
@@ -18,10 +20,10 @@ function Shell() {
   const { data: jobs } = useApi<Job[]>('/jobs', 10000)
   const review = jobs?.filter(j => j.status === 'needs_review').length ?? 0
   return <div className="shell">
-    <nav aria-label="Main"><h1>Applications</h1>
+    <nav aria-label="Main"><h1><Logo /></h1>
       <NavLink to="/" end>Pipeline</NavLink>
       <NavLink to="/review">Review{review > 0 && <b className="count">{review}</b>}</NavLink>
-      <NavLink to="/discover">Discover</NavLink><NavLink to="/auto">Auto-tailor</NavLink><NavLink to="/insights">Insights</NavLink><NavLink to="/profile">Profile</NavLink>
+      <NavLink to="/applied">Applied</NavLink><NavLink to="/discover">Discover</NavLink><NavLink to="/auto">Auto-tailor</NavLink><NavLink to="/insights">Insights</NavLink><NavLink to="/profile">Profile</NavLink>
       {s && <div className="foot">
         {s.discover.running && <p>{s.discover.phase === 'web search' ? 'Searching the web' : s.discover.phase === 'reading pages' ? 'Reading pages' : 'Finding roles'}{s.discover.total ? ` ${s.discover.done}/${s.discover.total}` : ''}…</p>}
         {s.auto?.running && <p><Link to="/auto">{s.auto.waiting ? 'Auto-tailor waiting' : s.auto.phase === 'tailoring' ? `Tailoring ${s.auto.done}/${s.auto.total}` : `${s.auto.phase === 'rating' ? 'Rating' : 'Reading adverts'} ${s.auto.done}/${s.auto.total}`}</Link></p>}
@@ -35,7 +37,7 @@ function Shell() {
       </div>}
       <Routes>
         <Route path="/" element={<Pipeline />} /><Route path="/review" element={<Review />} /><Route path="/discover" element={<Discover />} />
-        <Route path="/auto" element={<Auto />} /><Route path="/insights" element={<Insights />} /><Route path="/profile" element={<Profile />} /><Route path="/job/:id" element={<JobPage />} />
+        <Route path="/applied" element={<Applied />} /><Route path="/auto" element={<Auto />} /><Route path="/insights" element={<Insights />} /><Route path="/profile" element={<Profile />} /><Route path="/job/:id" element={<JobPage />} />
         <Route path="*" element={<p>Page not found.</p>} />
       </Routes>
     </main></div>

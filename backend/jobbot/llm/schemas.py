@@ -103,7 +103,7 @@ class CoverLetter(BaseModel):
 class Answer(BaseModel):
     field: str
     value: list[str]
-    basis: Literal["profile", "cv", "drafted", "unknown"]
+    basis: Literal["profile", "cv", "drafted", "guess", "unknown"]
     note: str
 
 

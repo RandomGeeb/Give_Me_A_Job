@@ -1,11 +1,18 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 
 export type Task = { kind: string; running: boolean; error: string | null; step?: string | null } | null
+export type Walk = { running: boolean; state: string; message: string; step: number; of: number; name: string; pages: { page: string; errors: string[]; filled: number; kept: number
+  check: { label: string; note: string; guess: boolean }[]; needs_you: string[]; failed: string[]; left: string[]; draft_error: string | null }[] } | null
+export type Limit = { state: 'sent' | 'reached' | 'taken' | 'pick' | 'ok'; n: number; days: number; used: number; left: number; going: number; quote: string; by: 'advert' | 'you'; free_on: string | null; others: string[] } | null
+export type Sent = { id: number | null; title: string; company: string; status: string; date: string; outside: string | null }
+type Role = { id: number; title: string; status: string }
+export type Employer = { key: string; company: string; yours: boolean; limit: { n: number; days: number; quote: string; by: 'advert' | 'you' } | null; advert: { n: number; days: number; quote: string; job: number } | null
+  applied: Sent[]; live: Role[]; drafts: Role[]; used: number | null; left: number | null; free_on: string | null }
 export type Job = {
   id: number; company: string; title: string; locations: string[]; regions: string[]; url: string; ats: string; source: string; family: string | null
   status: string; band: string | null; filter_reason: string | null; deadline: string | null; posted_at: string | null; next_action: string | null
   first_seen: string; updated_at: string; coverage: number | null; summary: string | null; eligible: string | null; competition: string | null; task: Task
-  tier: number | null; triage: { reason: string; basis: 'quick' | 'full' | 'title' | 'code' | 'you' } | null
+  tier: number | null; triage: { reason: string; basis: 'quick' | 'full' | 'title' | 'code' | 'you' } | null; limit: Limit
 }
 export type Issue = { severity: 'block' | 'warn' | 'note'; where: string; problem: string; suggestion: string; by: string }
 export type Answer = { label: string; kind: string; required: boolean; options: string[]; policy: string; value: string[]; basis: string; note: string }
@@ -23,7 +30,7 @@ export type Score = { eligible: string; eligibility_notes: string[]; competition
   requirements: { requirement: string; essential: boolean; met: string; evidence: string }[] }
 export type Detail = Omit<Job, 'coverage'> & { description: string; notes: string; score: Score | null; application: App | null; cv: CV | null; moves: string[]
   events: { id: number; at: string; kind: string; from_status: string; to_status: string; detail: string }[]
-  company_applications: number; company_cap: number; autofill: boolean }
+  company_applications: Sent[]; company_cap: number; autofill: boolean; walk: Walk; apply_url: string }
 export type Est = { mean: number; low: number; high: number; hits: number; n: number }
 export type Likelihood = { bands: Record<string, { interview: Est; offer: Est }>; resolved: number; needed: number; basis: string }
 

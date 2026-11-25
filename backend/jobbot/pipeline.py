@@ -1,15 +1,16 @@
 """Moves a job through scoring, tailoring, review, approval and filling."""
+import json
 import threading
 import traceback
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from pathlib import Path
 
-from . import config, costs, db, research, review, scoring
+from . import config, costs, db, limits, research, review, scoring
 from .apply import fields
 from .cv import render, reuse, tailor, verify
 from .llm.client import LLMError
-from .models import APPLIED, Status
+from .models import Status
 from .sources import ats, pages
 from .sources.http import client
 
@@ -143,13 +144,6 @@ def score(job_id: int) -> None:
             db.set_status(con, job_id, S.filtered_out if bad else S.scored, f"band {b}")
 
 
-def company_count(con, job: dict) -> int:
-    mine = db.norm(job["company"])
-    live = {str(s) for s in APPLIED} | {"approved", "filling"}
-    return sum(1 for r in con.execute("SELECT id,company,status FROM jobs") if
-               r["id"] != job["id"] and db.norm(r["company"]) == mine and r["status"] in live)
-
-
 def in_letter(i: dict) -> bool:
     return i["where"].lower().startswith("cover")
 
@@ -211,6 +205,16 @@ def letter_job(job_id: int, notes: str | None = None, fresh: bool = False) -> No
         db.log(con, job_id, "letter", detail=f"{len(found)} passages found, {sum(f['used'] for f in app['research'])} used")
 
 
+def wants_letter(f: dict) -> bool:
+    return fields.is_letter(f) or f["kind"] == "file" and "cover" in f["label"].lower()
+
+
+def applied_to(job: dict) -> list[str]:
+    """Roles at this employer already submitted, for questions that ask."""
+    with db.connect() as con:
+        return [a["title"] for a in limits.of(con, job)["applied"] if a["id"] != job["id"]]
+
+
 def tailor_job(job_id: int) -> None:
     cv, profile = candidate()
     step(job_id, "Reading the advert")
@@ -230,7 +234,8 @@ def tailor_job(job_id: int) -> None:
                 if not fields.looks_like_application(form):
                     form = []
                     raise NotReady("no application form on that page")
-                known, ask = fields.plan(form, profile)
+                # Work history is copied from the CV once you have approved it.
+                known, ask = fields.plan([f for f in form if not fields.WORK.match(f.get("section") or "")], profile)
             except Exception:
                 form_note = "The form could not be read in advance; its questions will appear when you open it and press Fill this page."
         else:
@@ -246,7 +251,9 @@ def tailor_job(job_id: int) -> None:
         else:
             step(job_id, "Tailoring your CV")
             t = tailor.tailor(job, cv, profile)
-        want_cover = bool(old.get("cover_letter")) or any(f["kind"] == "file" and "cover" in f["label"].lower() for f in form)
+        want_cover = bool(old.get("cover_letter")) or any(wants_letter(f) for f in form)
+        if want_cover:
+            ask = [f for f in ask if not fields.is_letter(f)]      # the letter itself goes there
         notes, found, problem, cover = old.get("letter_notes") or "", [], None, ""
         if want_cover:
             step(job_id, "Researching the company")
@@ -254,7 +261,8 @@ def tailor_job(job_id: int) -> None:
             step(job_id, "Writing the cover letter")
             cover, found = write_letter(job, cv, profile, found, notes)
         step(job_id, "Drafting form answers")
-        drafted = tailor.draft_answers(job, cv, profile, ask)
+        others = applied_to(job)
+        drafted = tailor.draft_answers(job, cv, profile, ask, others=others)
         polished, dropped = False, []
         for attempt in range(MAX_REVISIONS + 1):
             answers = {**known, **fields.merge(ask, drafted)}
@@ -292,7 +300,7 @@ def tailor_job(job_id: int) -> None:
             if in_cov and cover:
                 cover, found = write_letter(job, cv, profile, found, notes, cover, in_cov)
             if in_ans:
-                drafted = tailor.draft_answers(job, cv, profile, ask, {f["label"]: drafted[f["key"]]["value"] for f in ask}, in_ans)
+                drafted = tailor.draft_answers(job, cv, profile, ask, {f["label"]: drafted[f["key"]]["value"] for f in ask}, in_ans, others)
         if dropped:
             t["changes"] = t["changes"] + [f"Left out to fit one page: {x}" for x in dropped]
         if problem:
@@ -319,11 +327,11 @@ def recheck(job_id: int, **changes) -> dict:
         raise NotReady("There is nothing to edit at this stage.")
     with db.connect() as con:
         app = db.get_application(con, job_id)
-    before = review.content_hash(app)
+    before, was = review.content_hash(app), json.dumps(app["answers"])
     app.update({k: v for k, v in changes.items() if k in ("cv", "cover_letter") and v is not None})
     for k, v in (changes.get("answers") or {}).items():
         if k in app["answers"] and app["answers"][k]["policy"] != "consent" and not app["answers"][k]["policy"].startswith("sensitive"):
-            app["answers"][k].update(value=[x for x in v if x.strip()], edited=True)
+            app["answers"][k].update(value=[x for x in v if x.strip()], edited=True, on_form=False)
             if any(x.strip() for x in v):
                 app["answers"][k]["basis"] = "profile"     # now the user's own words
             else:
@@ -333,6 +341,9 @@ def recheck(job_id: int, **changes) -> dict:
         path, n = render.render(app["cv"], cv, profile, job_id)
         app["pdf_path"] = str(path)
     if review.content_hash(app) == before:
+        if json.dumps(app["answers"]) != was:       # an answer written while filling was blanked, which approval does not cover
+            with db.connect() as con:
+                db.save_application(con, job_id, answers=app["answers"])
         return app
     rv = app["review"] or {"strengths": []}
     keep = [i for i in rv.get("issues", []) if i.get("by") == "AI" or i["where"] in ("Form", "Company research")]
@@ -351,10 +362,12 @@ def rereview(job_id: int) -> None:
     job = _job(job_id)
     with db.connect() as con:
         app = db.get_application(con, job_id)
-    ai = review.ai_review(job, cv, profile, app)
+    ai, seen = review.ai_review(job, cv, profile, app), json.dumps(app["answers"])
+    with db.connect() as con:
+        app = db.get_application(con, job_id)      # more answers may have been written meanwhile
     n = app["review"].get("pages")
     form = [i for i in app["review"]["issues"] if i["where"] in ("Form", "Company research")]
-    rv = {**ai, "issues": review.code_checks(job, cv, profile, app, n) + ai["issues"] + form, "pages": n, "ai_stale": False}
+    rv = {**ai, "issues": review.code_checks(job, cv, profile, app, n) + ai["issues"] + form, "pages": n, "ai_stale": json.dumps(app["answers"]) != seen}
     with db.connect() as con:
         db.save_application(con, job_id, review=rv)
 
@@ -366,9 +379,9 @@ def approve(job_id: int, override: str | None = None) -> None:
             raise NotReady("Only an application waiting for review can be approved.")
         if tasks.get(job_id, {}).get("running"):
             raise NotReady("Wait for the current step to finish.")
-        app, cap = db.get_application(con, job_id), db.settings(con)["max_per_company"]
-        if company_count(con, job) >= cap:
-            raise NotReady(f"You already have {cap} application(s) to {job['company']}. Change the cap on the Profile page if the employer allows more.")
+        app = db.get_application(con, job_id)
+        if (no := limits.refuse(con, job, db.settings(con)["max_per_company"], True)):
+            raise NotReady(no)
         block = review.blockers(app)
         if app["review"].get("ai_stale") and any(review.needs_check(a) for a in app["answers"].values()) and \
                 tasks.get(job_id, {}).get("error") and not (override or "").strip():
@@ -377,7 +390,9 @@ def approve(job_id: int, override: str | None = None) -> None:
             raise NotReady(f"{len(block)} blocking issue(s) remain. Fix them, or say why you are overriding.")
         if not app.get("pdf_path") or not Path(app["pdf_path"]).exists():
             raise NotReady("The CV file is missing. Tailor again.")
-        db.save_application(con, job_id, approved_hash=review.content_hash(app))
+        for a in app["answers"].values():        # you have now seen these in the dashboard too
+            a.pop("on_form", None)
+        db.save_application(con, job_id, answers=app["answers"], approved_hash=review.content_hash(app))
         db.set_status(con, job_id, S.approved, f"override: {override}" if block else None)
 
 
@@ -393,6 +408,9 @@ def _approved(job_id: int) -> tuple[dict, dict]:
 def open_form(job_id: int) -> None:
     from .apply.session import session
     job, _ = _approved(job_id)
+    with db.connect() as con:        # you may have used up the employer's limit since approving this
+        if (no := limits.refuse(con, job, 0, False)):
+            raise NotReady(no)
     if not ats.is_blocked(job["apply_url"]):
         session.open(job_id, job["apply_url"])
     else:
@@ -402,43 +420,95 @@ def open_form(job_id: int) -> None:
             db.set_status(con, job_id, S.filling)
 
 
-def fill_page(job_id: int) -> dict:
+def fill_page(job_id: int, skip: set = frozenset(), then_review: bool = True) -> dict:
+    """skip: fields already filled on this page. then_review: False when more pages follow, so one review covers them all."""
     from .apply.session import session
     cv, profile = candidate()
     job, app = _approved(job_id)
-    fs = session.extract(job_id)
-    if not fs:
+    if not skip:
+        session.add_panels(job_id, len(fields.worked(app["cv"], cv)))
+    found = session.extract(job_id)
+    if not found:
         raise NotReady("No form fields found on this page. If you need to sign in or press Apply, do that first.")
-    known, ask = fields.plan(fs, profile)
+    fs = [f for f in found if not f.get("theirs") and f["key"] not in skip]
+    known, ask = fields.plan(fs, profile, cv, app["cv"])
     stored = app["answers"] or {}
-    new = [f for f in ask if f["key"] not in stored]
+    name = f"{profile['first_name']} {profile['last_name']}".strip() or cv["name"]
     usable = {**known, **{f["key"]: stored[f["key"]] for f in ask if f["key"] in stored}}
+    for f in ask:
+        a = stored.get(f["key"])
+        if fields.is_letter(f) and app["cover_letter"] and not (a or {}).get("edited") and len(app["cover_letter"]) + 100 < (f.get("maxlength") or 1e9):
+            usable[f["key"]] = {**f["base"], "value": [app["cover_letter"]], "basis": "drafted", "note": "Your cover letter."}
+    # Answers left blank before guessing was allowed get one more try. Ones you chose to leave blank do not.
+    todo = [f for f in ask if f["key"] not in usable or
+            usable[f["key"]]["basis"] == "unknown" and not usable[f["key"]].get("edited") and not usable[f["key"]].get("tried")]
+    keys = {f["key"] for f in todo}
     transcript = next((p for p in sorted(config.DOCS.glob("transcript*.pdf"))), None)
     letter = None
     if app["cover_letter"] and any(f["kind"] == "file" and "cover" in f["label"].lower() for f in fs):
         letter = render.render_letter(app["cover_letter"], cv, profile, job)
-    res = session.fill(job_id, fs, usable, {"cv": Path(app["pdf_path"]), "transcript": transcript, "cover_letter": letter})
-    res["new_questions"] = 0
-    if new:
-        drafted = fields.merge(new, tailor.draft_answers(job, cv, profile, new))
-        app["answers"] = {**stored, **drafted}
-        fresh = [a for a in drafted.values() if a["value"]]
-        rv = app["review"]
-        rv["ai_stale"] = bool(fresh) or rv["ai_stale"]
-        rv["issues"] = rv["issues"] + [i for a in fresh if review.needs_check(a) for i in
-                                       verify.check_prose(
-                                           f"Answer: {a['label'][:60]}", " ".join(a["value"]), cv, profile, job)]
-        with db.connect() as con:
-            db.save_application(con, job_id, answers=app["answers"], review=rv)
-            if fresh:      # the content hash no longer matches, so this needs a fresh approval
-                db.save_application(con, job_id, approved_hash=None)
-                db.set_status(con, job_id, S.needs_review, f"{len(fresh)} new question(s) on the form")
-        res["new_questions"] = len(fresh)
-        if fresh:
-            start(job_id, "review", rereview)    # new AI text gets the same independent review
+    files = {"cv": Path(app["pdf_path"]), "transcript": transcript, "cover_letter": letter}
+    letters = {f["key"] for f in fs if fields.is_letter(f)}
+    ready = lambda d: {k: {**a, "value": [fields.letter_text(a["value"][0], name)]} if k in letters and a["value"] and not a.get("edited") else a
+                       for k, a in d.items()}
+    res = session.fill(job_id, fs, ready(usable), files, None, keys)
+    res |= {"new_questions": 0, "draft_error": None, "keys": [f["key"] for f in found], "blocking": res.get("blocking", []),
+            "left": sorted({f["section"] for f in found if f.get("theirs")})}
+    if todo:
+        try:
+            drafted = draft_on_form(job, cv, profile, todo)
+        except (LLMError, costs.LimitReached) as e:
+            res["draft_error"] = str(e)
+            drafted = {}
+        with db.connect() as con:      # it may have been edited while the answers were being written
+            now = db.get_application(con, job_id)
+            ok = db.get_job(con, job_id)["status"] in (S.approved, S.filling) and review.is_approved(now)
+            if drafted:
+                fresh = {k: a for k, a in drafted.items() if not ((now["answers"] or {}).get(k) or {}).get("edited")}
+                now["answers"] = {**(now["answers"] or {}), **fresh}
+                rv = now["review"]
+                wrote = [a for a in fresh.values() if a["value"]]
+                rv["ai_stale"] = bool(wrote) or rv["ai_stale"]
+                rv["issues"] = rv["issues"] + [i for a in wrote for i in review.answer_checks(job, cv, profile, a)]
+                db.save_application(con, job_id, answers=now["answers"], review=rv)
+                res["new_questions"] = len(wrote)
+        if not ok:
+            raise NotReady("The application changed while its answers were being written, so they were saved but not entered. Approve it, then fill again.")
+        more = session.fill(job_id, fs, ready({**usable, **{k: now["answers"][k] for k in keys if k in now["answers"]}}), files, keys)
+        for k in ("filled", "kept", "check", "needs_you", "failed"):
+            res[k] += more[k]
+        res["blocking"] += more.get("blocking", [])
+        if res["new_questions"] and then_review:
+            review_later(job_id)
     with db.connect() as con:
         db.log(con, job_id, "fill", detail=f"{res['filled']} filled, {len(res['needs_you'])} need you, {len(res['failed'])} failed")
     return res
+
+
+def review_later(job_id: int) -> None:
+    """New AI text gets the same independent review, shown while you check the form."""
+    try:
+        start(job_id, "review", rereview)
+    except NotReady:
+        pass        # one is running; it will see the application has changed and say so
+
+
+def draft_on_form(job, cv, profile, todo: list[dict]) -> dict[str, dict]:
+    """Answers for questions first seen on the form. Anything the checks reject is rewritten once, then flagged."""
+    others = applied_to(job)
+    got = fields.merge(todo, tailor.draft_answers(job, cv, profile, todo, others=others))
+    bad = {k: i for k, a in got.items() if (i := [x for x in review.answer_checks(job, cv, profile, a) if x["severity"] == "block"])}
+    if bad:
+        again = [f for f in todo if f["key"] in bad]
+        got |= fields.merge(again, tailor.draft_answers(job, cv, profile, again, {f["label"]: got[f["key"]]["value"] for f in again},
+                                                        [i for x in bad.values() for i in x], others))
+        for f in again:
+            a = got[f["key"]]
+            if (left := [x["problem"] for x in review.answer_checks(job, cv, profile, a) if x["severity"] == "block"]):
+                a["note"] = f"{' '.join(left)}. Check this before using it. {a['note']}".strip()
+    for a in got.values():
+        a["on_form"] = True
+    return got
 
 
 def move(job_id: int, to: str, detail: str | None = None) -> None:

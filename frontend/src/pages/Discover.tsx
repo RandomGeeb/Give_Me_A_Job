@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { api, day, FAMILY, Job, REGION, useApi } from '../api'
-import { Deadline, Empty, Err, Field, rating, TIER, useAction } from '../components/ui'
+import { Deadline, Empty, Err, Field, LimitPill, rating, TIER, useAction } from '../components/ui'
 
 const RANK = ['Strong', 'Competitive', 'Possible', 'Reach']
 export default function Discover() {
@@ -43,7 +43,7 @@ export default function Discover() {
         <span className="small muted">{j.locations.join(', ')}{j.family ? ` · ${FAMILY[j.family]}` : ''}{j.posted_at ? ` · posted ${day(j.posted_at)}` : ''}</span>
         {j.filter_reason && <span className="small">Filtered: {j.filter_reason}</span>}{j.summary ? <span className="small">{j.summary}</span> : j.triage && !j.filter_reason && <span className="small">{j.triage.reason}</span>}{j.triage?.basis === 'title' && <span className="small due">Rated from its title only: the advert could not be read</span>}
         {j.task?.running && <span className="small">Scoring…</span>}{j.task?.error && <span className="small due">{j.task.error}</span>}</span>
-        <select className={`rate t${rating(j) ?? 0}`} aria-label={`Rating for ${j.company}`} title="Change the rating" value={rating(j) ?? ''} onChange={e => act.run('t', async () => { await api(`/jobs/${j.id}/tier`, 'PUT', { tier: +e.target.value }); await reload() })}><option value="" disabled>Not rated</option>{[1, 2, 3, 4].map(t => <option key={t} value={t}>{t}: {TIER[t][1]}</option>)}</select><Deadline d={j.deadline} />
+        <LimitPill l={j.limit} /><select className={`rate t${rating(j) ?? 0}`} aria-label={`Rating for ${j.company}`} title="Change the rating" value={rating(j) ?? ''} onChange={e => act.run('t', async () => { await api(`/jobs/${j.id}/tier`, 'PUT', { tier: +e.target.value }); await reload() })}><option value="" disabled>Not rated</option>{[1, 2, 3, 4].map(t => <option key={t} value={t}>{t}: {TIER[t][1]}</option>)}</select><Deadline d={j.deadline} />
         {show === 'open' ? <span className="acts"><button onClick={() => move(j.id, 'shortlisted')}>Shortlist</button><button className="plain" onClick={() => move(j.id, 'closed')}>Hide</button></span> : <button onClick={() => move(j.id, 'discovered')}>Restore</button>}</li>)}</ul>}
     {rows.length > limit && <button onClick={() => setLimit(limit + 60)}>Show more ({rows.length - limit})</button>}</>
 }

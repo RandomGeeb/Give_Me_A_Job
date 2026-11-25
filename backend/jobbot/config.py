@@ -31,7 +31,7 @@ DEFAULT_SETTINGS = {
     "prior_weight": 20,
     "profile": {
         "first_name": "", "last_name": "", "preferred_name": "", "email": "",
-        "phone": "", "city": "", "country": "United Kingdom",
+        "phone": "", "address": "", "city": "", "postcode": "", "country": "United Kingdom",
         "linkedin": "", "github": "", "website": "",
         "university": "", "degree": "", "discipline": "",
         "degree_level": "", "grade": "", "study_start": "", "graduation": "",

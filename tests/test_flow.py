@@ -52,7 +52,7 @@ def stand_ins(monkeypatch):
     from jobbot.apply.fields import add_keys
     m = mock.Mock()
     m.tailor.side_effect = lambda *a: tcv("Helped build a Python service")
-    m.answers.side_effect = lambda job, cv, profile, fs, *a: {f["key"]: {"value": ["I like Python."], "basis": "drafted", "note": ""} for f in fs}
+    m.answers.side_effect = lambda job, cv, profile, fs, *a, **k: {f["key"]: {"value": ["I like Python."], "basis": "drafted", "note": ""} for f in fs}
     m.review.side_effect = lambda *a: {**GOOD, "issues": []}
     monkeypatch.setattr(scoring, "score_job", lambda *a: dict(SCORE))
     monkeypatch.setattr(tailor, "tailor", m.tailor)
@@ -65,7 +65,7 @@ def stand_ins(monkeypatch):
     monkeypatch.setattr(sess, "read_form", lambda url: add_keys([dict(f) for f in FIELDS]))
     s = mock.Mock()
     s.extract.side_effect = lambda i: add_keys([dict(f) for f in FIELDS])
-    s.fill.return_value = {"filled": 2, "needs_you": ["I agree to the terms"], "failed": []}
+    s.fill.side_effect = lambda *a: {"filled": 2, "kept": 0, "check": [], "needs_you": ["I agree to the terms"], "failed": []}
     monkeypatch.setattr(sess, "session", s)
     m.session = s
     return m
@@ -127,24 +127,118 @@ def test_ai_rule_blocks(c, stand_ins):
     assert stand_ins.tailor.call_count == 1 and c.post(f"/api/jobs/{i}/approve", json={}).status_code == 409
 
 
-def test_new_questions_need_approval(c, stand_ins):
+def add_question(stand_ins, kind="textarea", label="Page two question"):
     from jobbot.apply.fields import add_keys
+    extra = FIELDS + [{"kind": kind, "label": label, "options": [], "required": True, "jb": "jb9", "frame": 0}]
+    stand_ins.session.extract.side_effect = lambda i: add_keys([dict(f) for f in extra])
+
+
+def approved(c):
     i = to_review(c)
     c.post(f"/api/jobs/{i}/approve", json={}); c.post(f"/api/jobs/{i}/open")
-    extra = FIELDS + [{"kind": "textarea", "label": "Page two question", "options": [], "required": True, "jb": "jb9", "frame": 0}]
-    stand_ins.session.extract.side_effect = lambda i: add_keys([dict(f) for f in extra])
+    return i
+
+
+def test_new_questions_are_answered_on_the_form(c, stand_ins):
+    i = approved(c)
+    add_question(stand_ins)
     r = c.post(f"/api/jobs/{i}/fill").json()
+    first, second = stand_ins.session.fill.call_args_list
+    key = "page two question|textarea"
+    assert first.args[5] == {key} and key not in first.args[2]
+    assert second.args[4] == {key} and second.args[2][key]["value"] == ["I like Python."]
+    assert r["new_questions"] == 1 and r["filled"] == 4 and r["draft_error"] is None
     assert wait(i)["kind"] == "review" and stand_ins.review.call_count == 2
-    assert r["new_questions"] == 1 and "page two question|textarea" not in stand_ins.session.fill.call_args.args[2]
-    assert c.get(f"/api/jobs/{i}").json()["status"] == "needs_review" and c.post(f"/api/jobs/{i}/fill").status_code == 409
-    c.post(f"/api/jobs/{i}/approve", json={})
-    assert c.post(f"/api/jobs/{i}/open").status_code == 200
+    # What was approved has not changed, so filling again works and writes nothing new.
+    n = stand_ins.answers.call_count
+    assert c.get(f"/api/jobs/{i}").json()["status"] == "filling" and c.post(f"/api/jobs/{i}/fill").status_code == 200
+    assert stand_ins.answers.call_count == n
+    # Changing it in the dashboard does need approving.
+    c.put(f"/api/jobs/{i}/application", json={"answers": {key: ["Mine"]}})
+    assert c.get(f"/api/jobs/{i}").json()["status"] == "needs_review"
+    assert c.post(f"/api/jobs/{i}/approve", json={}).status_code == 200 and c.post(f"/api/jobs/{i}/open").status_code == 200
+
+
+def test_old_blanks_are_tried_once(c, stand_ins):
+    i = to_review(c)
+    key = "why us|textarea"
+    blank = {"value": [], "basis": "unknown", "note": "Not stated."}
+    with db.connect() as con:
+        a = db.get_application(con, i)["answers"]
+        a[key].update(blank); a[key].pop("tried", None)
+        db.save_application(con, i, answers=a)
+    c.post(f"/api/jobs/{i}/approve", json={}); c.post(f"/api/jobs/{i}/open")
+    stand_ins.answers.side_effect = lambda job, cv, profile, fs, *a, **k: {f["key"]: {**blank, "tried": True} for f in fs}
+    n = stand_ins.answers.call_count
+    c.post(f"/api/jobs/{i}/fill"); c.post(f"/api/jobs/{i}/fill")
+    assert stand_ins.answers.call_count == n + 1
+
+
+def test_answers_you_blanked_stay_blank(c, stand_ins):
+    i = to_review(c)
+    c.put(f"/api/jobs/{i}/application", json={"answers": {"why us|textarea": [""]}})
+    c.post(f"/api/jobs/{i}/approve", json={}); c.post(f"/api/jobs/{i}/open")
+    n = stand_ins.answers.call_count
+    assert c.post(f"/api/jobs/{i}/fill").status_code == 200 and stand_ins.answers.call_count == n
+
+
+def test_blanking_a_form_answer_is_saved(c, stand_ins):
+    i = approved(c)
+    add_question(stand_ins)
+    c.post(f"/api/jobs/{i}/fill"); wait(i)
+    key = "page two question|textarea"
+    c.put(f"/api/jobs/{i}/application", json={"answers": {key: [""]}})
+    assert c.get(f"/api/jobs/{i}").json()["application"]["answers"][key]["value"] == []
+
+
+def test_fill_survives_no_claude(c, stand_ins):
+    from jobbot.llm.client import LLMError
+    i = approved(c)
+    add_question(stand_ins)
+    stand_ins.answers.side_effect = LLMError("Claude is unavailable.")
+    r = c.post(f"/api/jobs/{i}/fill")
+    assert r.status_code == 200 and r.json()["draft_error"] == "Claude is unavailable."
+    assert c.get(f"/api/jobs/{i}").json()["status"] == "filling"
+
+
+def test_edits_made_while_drafting_win(c, stand_ins):
+    i = approved(c)
+    add_question(stand_ins)
+    def slow(job, cv, profile, fs, *a, **k):
+        pipeline.recheck(i, answers={"why us|textarea": ["Edited meanwhile"]})
+        return {f["key"]: {"value": ["New"], "basis": "guess", "note": ""} for f in fs}
+    stand_ins.answers.side_effect = slow
+    assert c.post(f"/api/jobs/{i}/fill").status_code == 409 and stand_ins.session.fill.call_count == 1
+    a = c.get(f"/api/jobs/{i}").json()["application"]["answers"]
+    assert a["why us|textarea"]["value"] == ["Edited meanwhile"] and a["page two question|textarea"]["value"] == ["New"]
+
+
+def test_unsupported_form_answer_rewritten_then_flagged(c, stand_ins):
+    i = approved(c)
+    add_question(stand_ins)
+    stand_ins.answers.side_effect = lambda job, cv, profile, fs, *a, **k: {
+        f["key"]: {"value": ["I grew revenue by 73% at Initech."], "basis": "guess", "note": ""} for f in fs}
+    n = stand_ins.answers.call_count
     c.post(f"/api/jobs/{i}/fill")
-    assert stand_ins.session.fill.call_args.args[2]["page two question|textarea"]["value"]
+    assert stand_ins.answers.call_count == n + 2
+    sent = stand_ins.session.fill.call_args.args[2]["page two question|textarea"]
+    assert "No source for" in sent["note"] and "73" in sent["note"]
+
+
+def test_cover_letter_box_gets_the_letter(c, stand_ins, monkeypatch):
+    from jobbot.apply.fields import add_keys
+    form = FIELDS + [{"kind": "textarea", "label": "Cover letter", "options": [], "required": True, "jb": "jb9", "frame": 0}]
+    monkeypatch.setattr(sess, "read_form", lambda url: add_keys([dict(f) for f in form]))
+    stand_ins.session.extract.side_effect = lambda i: add_keys([dict(f) for f in form])
+    i = approved(c)
+    assert all(f["label"] != "Cover letter" for f in stand_ins.answers.call_args.args[3])
+    c.post(f"/api/jobs/{i}/fill")
+    v = stand_ins.session.fill.call_args.args[2]["cover letter|textarea"]["value"][0]
+    assert v.startswith("Dear Hiring Team,") and "Globex moved" in v and v.endswith(CV["name"])
 
 
 def test_mislabelled_draft_still_checked(c, stand_ins):
-    stand_ins.answers.side_effect = lambda job, cv, profile, fs, *a: {f["key"]: {"value": ["I grew revenue by 73% at Initech."], "basis": "profile", "note": ""} for f in fs}
+    stand_ins.answers.side_effect = lambda job, cv, profile, fs, *a, **k: {f["key"]: {"value": ["I grew revenue by 73% at Initech."], "basis": "profile", "note": ""} for f in fs}
     i = to_review(c)
     assert c.get(f"/api/jobs/{i}").json()["application"]["blockers"] == 1
 

@@ -1,14 +1,16 @@
 """Local API. Bound to 127.0.0.1 and closed to other websites by Host, Origin and header checks."""
 import threading
+from datetime import date
 from pathlib import Path
 from typing import Any, Literal
+from uuid import uuid4
 
 from fastapi import FastAPI, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
-from . import auto, config, costs, db, filters, pipeline, review, scoring
+from . import auto, config, costs, db, filters, limits, pipeline, review, scoring, walk
 from .cv import parse
 from .llm.client import LLMError
 from .llm import client as llm
@@ -57,7 +59,9 @@ def slim(d: dict) -> dict:
 @app.get("/api/jobs")
 def jobs():
     with db.connect() as con:
-        return [slim(db.row(r)) for r in con.execute(f"SELECT {LIST} FROM jobs ORDER BY first_seen DESC")]
+        emp = limits.employers(con)
+        return [{**slim(d := db.row(r)), "limit": limits.status(emp[limits.key(d["company"], d["id"])], d["id"])}
+                for r in con.execute(f"SELECT {LIST} FROM jobs ORDER BY first_seen DESC")]
 
 
 @app.get("/api/jobs/{job_id}")
@@ -69,15 +73,64 @@ def job(job_id: int):
         a = db.get_application(con, job_id)
         ev = [dict(r) for r in con.execute("SELECT * FROM events WHERE job_id=? ORDER BY id", (job_id,))]
         cv = db.get_setting(con, "cv")
-        n, cap = pipeline.company_count(con, j), db.settings(con)["max_per_company"]
+        e, cap = limits.of(con, j), db.settings(con)["max_per_company"]
     if a:
         a["approved"] = review.is_approved(a)
         a["blockers"] = len(review.blockers(a))
         a["has_pdf"] = bool(a["pdf_path"] and Path(a["pdf_path"]).exists())
         a.pop("pdf_path"), a.pop("approved_hash")
-    return {**j, "application": a, "events": ev, "cv": cv, "task": pipeline.tasks.get(job_id),
-            "moves": sorted(TRANSITIONS[j["status"]]), "company_applications": n, "company_cap": cap,
+    return {**j, "application": a, "events": ev, "cv": cv, "task": pipeline.tasks.get(job_id), "walk": walk.state(job_id),
+            "moves": sorted(TRANSITIONS[j["status"]]), "company_applications": [a for a in e["applied"] if a["id"] != job_id], "company_cap": cap, "limit": limits.status(e, job_id),
             "autofill": j["ats"] in ats.POLL}
+
+
+@app.get("/api/limits")
+def get_limits():
+    with db.connect() as con:
+        emp, cap = limits.employers(con), db.settings(con)["max_per_company"]
+    sent = sorted((a for e in emp.values() for a in e["applied"]), key=lambda a: a["date"], reverse=True)
+    return {"cap": cap, "applied": sent, "employers": sorted((e for e in emp.values() if e["limit"] or e["yours"] or e["applied"] or e["live"]), key=lambda e: e["company"].lower())}
+
+
+class OwnLimit(BaseModel):
+    n: int | None = Field(None, ge=0, le=50)        # 0: no limit. None: go back to what the adverts say.
+    days: int = Field(limits.CYCLE, ge=1, le=1500)
+
+
+@app.put("/api/limits/{k}")
+def put_limit(k: str, b: OwnLimit):
+    with db.connect() as con:
+        if k not in limits.employers(con):
+            raise HTTPException(404)
+        mine = db.get_setting(con, "employer_limits", {})
+        mine.pop(k, None)
+        if b.n is not None:
+            mine[k] = {"n": b.n, "days": b.days}
+        db.put_setting(con, "employer_limits", mine)
+    return {"ok": True}
+
+
+class Outside(BaseModel):
+    company: str = Field(min_length=1, max_length=120)
+    title: str = Field(min_length=1, max_length=200)
+    date: date
+
+
+@app.post("/api/outside")
+def add_outside(b: Outside):
+    """An application you made without this dashboard, so counts and limits are right."""
+    if not b.company.strip() or not b.title.strip() or b.date > date.today():
+        raise HTTPException(422, "Give the employer, the role and a date that has passed.")
+    with db.connect() as con:
+        db.put_setting(con, "outside_apps", [*db.get_setting(con, "outside_apps", []), {"id": uuid4().hex, "company": b.company.strip(), "title": b.title.strip(), "date": b.date.isoformat()}])
+    return {"ok": True}
+
+
+@app.delete("/api/outside/{i}")
+def drop_outside(i: str):
+    with db.connect() as con:
+        db.put_setting(con, "outside_apps", [o for o in db.get_setting(con, "outside_apps", []) if o["id"] != i])
+    return {"ok": True}
 
 
 class NewJob(BaseModel):
@@ -230,7 +283,30 @@ def open_form(job_id: int):
 
 @app.post("/api/jobs/{job_id}/fill")
 def fill(job_id: int):
+    if (walk.state(job_id) or {}).get("running"):
+        raise pipeline.NotReady("This application is being filled already. Stop that first.")
     return pipeline.fill_page(job_id)
+
+
+class Link(BaseModel):
+    url: str
+
+
+@app.put("/api/jobs/{job_id}/link")
+def link(job_id: int, b: Link):
+    return walk.set_link(job_id, b.url)
+
+
+@app.post("/api/jobs/{job_id}/fill-all")
+def fill_all(job_id: int):
+    walk.start(job_id)
+    return {"ok": True}
+
+
+@app.post("/api/jobs/{job_id}/fill-stop")
+def fill_stop(job_id: int):
+    walk.stop(job_id)
+    return {"ok": True}
 
 
 @app.get("/api/jobs/{job_id}/cv.pdf")

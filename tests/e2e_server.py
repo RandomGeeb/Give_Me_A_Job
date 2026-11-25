@@ -27,7 +27,7 @@ def fake(purpose, system, shared, content, out, **kw):
     if purpose == "answers":
         import json, re
         form = json.loads(re.search(r"<form>\n(.*)\n</form>", content, re.S)[1])
-        pick = {"Degree": ["Bachelor's Degree"], "Will you need visa sponsorship?": ["No"], "Languages used": ["Python"], "Are you authorised to work in the UK?": ["Yes"]}
+        pick = {"Degree": ["Bachelor's Degree"], "Will you need visa sponsorship?": ["No"], "Languages used": ["Python"], "Are you authorised to work in the UK?": ["Yes"], "Free all summer?": ["YES"]}
         return s.Answers(answers=[s.Answer(field=f["id"], value=pick.get(f["question"], ["I enjoy building services in Python."]),
                                            basis="profile" if f["question"] in pick else "drafted", note="") for f in form])
     raise AssertionError(purpose)

@@ -26,7 +26,11 @@ CONSENT = re.compile(
 NOT_APPLICATION = re.compile(r"newsletter|subscri(be|ption)|insights and updates|job alerts?|talent alerts?|search (jobs|roles|site|openings)|"
                              r"^search$|cookie|(choose|select) (your )?(language|region)|^(language|region)$", re.I)
 AI_RULE = re.compile(r"without (the )?(use|using|help|assistance)( of)? (an? )?(ai|llm|chatgpt)|(not|don't|do not|never) use (an? )?(ai|chatgpt|llm|generative)|"
-                     r"\bai[- ](generated|assist)|\b(have|did) you use[d]? (any )?(ai|chatgpt|generative)", re.I)
+                     r"\bai[- ](generated|assist)|\bai (usage )?policy\b|\b(have|did) you use[d]? (any )?(ai|chatgpt|generative)", re.I)
+# Statements with consequences that only the applicant can make. Never guessed, even if the model offers to.
+LEGAL = re.compile(r"sanction|export (control|compliance)|embargo|contractual|non.?compete|non.?solicit|restrictive covenant|conflicts? of interest|"
+                   r"politically exposed|\bapplies to you\b|security clearance|disciplinary|dismissed|bankrupt|regulatory (action|investigation)|"
+                   r"legal (action|proceeding)|\bdeclar|\bcertif(y|ication that)", re.I)
 
 
 def classify(label: str, kind: str, options: list[str] | None = None) -> str:
@@ -46,3 +50,8 @@ def classify(label: str, kind: str, options: list[str] | None = None) -> str:
     if AI_RULE.search(label):
         return "ai_rule"
     return "ok"
+
+
+def must_stop(f: dict) -> bool:
+    """A blank here needs you before the form can move on. Optional tick-boxes, such as marketing, do not."""
+    return bool(f["required"]) or (f["policy"] == "consent" and bool(CONSENT.search(f["label"])))

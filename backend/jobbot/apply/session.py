@@ -31,7 +31,7 @@ class Session:
         self.lock = threading.Lock()
         self.pages: dict[int, object] = {}
 
-    def run(self, fn, timeout: float = 240):
+    def run(self, fn, timeout: float = 600):
         with self.lock:
             if not self.thread or not self.thread.is_alive():
                 self.thread = threading.Thread(target=self._loop, daemon=True)
@@ -72,11 +72,40 @@ class Session:
             fill.wait_ready(page)
         return self.run(go)
 
-    def extract(self, job_id: int) -> list[dict]:
-        return self.run(lambda ctx: fill.extract(self._page(ctx, job_id)))
+    def go(self, job_id: int, url: str) -> None:
+        """Take an open form window to another link. Does nothing if it is not open."""
+        if job_id not in self.pages:
+            return
 
-    def fill(self, job_id: int, fs, answers, files) -> dict:
-        return self.run(lambda ctx: fill.fill(self._page(ctx, job_id), fs, answers, files))
+        def move(ctx):
+            page = self.pages.get(job_id)
+            if page is not None and not page.is_closed():
+                page.goto(url, wait_until="domcontentloaded", timeout=45000)
+                page.bring_to_front()
+                return
+            self.pages.pop(job_id, None)
+        self.run(move)
+
+    def extract(self, job_id: int, with_options: bool = True) -> list[dict]:
+        return self.run(lambda ctx: fill.extract(self._page(ctx, job_id), with_options))
+
+    def step(self, job_id: int) -> dict:
+        return self.run(lambda ctx: {k: v for k, v in fill.step(self._page(ctx, job_id)).items() if k != "frame"})
+
+    def begin(self, job_id: int, s: dict) -> None:
+        self.run(lambda ctx: fill.begin(self._page(ctx, job_id), s))
+
+    def settle(self, job_id: int) -> None:
+        self.run(lambda ctx: fill.wait_ready(self._page(ctx, job_id), 4000))
+
+    def add_panels(self, job_id: int, work: int) -> None:
+        self.run(lambda ctx: fill.add_panels(self._page(ctx, job_id), work))
+
+    def press_next(self, job_id: int) -> bool:
+        return self.run(lambda ctx: fill.press_next(self._page(ctx, job_id)))
+
+    def fill(self, job_id: int, fs, answers, files, only=None, waiting=frozenset()) -> dict:
+        return self.run(lambda ctx: fill.fill(self._page(ctx, job_id), fs, answers, files, only, waiting))
 
     def _page(self, ctx, job_id):
         page = self.pages.get(job_id)

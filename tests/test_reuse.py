@@ -133,6 +133,7 @@ def test_same_role_listed_twice():
     b, c = add("Graphcore Early Careers", "Cloud Intern", DATA), add("Graphcore Early Careers", "Cloud Intern", DATA, city="Leeds, UK")
     with db.connect() as con:
         con.execute("UPDATE jobs SET tier=1 WHERE id IN (?,?)", (b, c))
+        db.put_setting(con, "max_per_company", 5)          # both names are one employer, so they share its cap
         queue, _, _, twins = auto.candidates(con)
         assert [q["id"] for q in queue] == [c] and [t["id"] for t in twins] == [b] and twins[0]["twin"] == "Graphcore"
         db.set_status(con, b, "shortlisted")

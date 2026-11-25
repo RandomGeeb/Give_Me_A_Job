@@ -1,0 +1,76 @@
+<!doctype html><meta charset=utf-8><title>Mock Workday</title>
+<style>[data-automation-id=dateInputWrapper] input{width:40px}.popup{border:1px solid;background:#fff}</style>
+<div id=root></div><div id=portal></div>
+<script>
+// Follows the element names and behaviour of Workday's own apply pages: one document, steps swapped in place, lists drawn in a pop-up.
+const NAMES = ['Create Account/Sign In', 'My Information', 'My Experience', 'Application Questions', 'Voluntary Disclosures', 'Review'];
+let at = -1, submits = 0, presses = 0, adds = { work: 0, edu: 0 }, saved = {}, signed = false, reject = location.search.includes('reject');
+window.J = () => ({ at, submits, presses, adds, saved });
+const req = '<abbr>*</abbr>', F = (id, label, inner, r) => `<div data-automation-id="formField-${id}"><label for="${id}">${label}${r ? req : ''}</label>${inner}</div>`;
+const T = (id, label, r, v = '') => F(id, label, `<input id="${id}" type=text value="${v}" ${r ? 'aria-required=true' : ''}>`, r);
+const D = (id, label, opts, r, v = 'Select One') => F(id, label, `<button type=button id="${id}" aria-haspopup=listbox aria-label="${label} ${v} ${r ? 'Required' : ''}" data-opts="${opts.join('|')}">${v}</button><input type=text style="position:absolute;left:-9999px">`, r);
+const M = (id, label, opts, r, pill = '') => F(id, label, `<div data-automation-id=multiSelectContainer data-uxi-widget-type=multiselect data-opts='${JSON.stringify(opts)}'><ul>${pill ? `<li data-automation-id=selectedItem><p data-automation-id=promptOption>${pill}</p></li>` : ''}</ul><input id="${id}" placeholder=Search type=text autocomplete=off></div>`, r);
+const part = (id, p) => `<div><input role=spinbutton id="${id}-dateSection${p}-input" data-automation-id="dateSection${p}-input" aria-label="${p}" type=text></div>`;
+const DT = (id, label, r, ps = ['Month', 'Year']) => `<div data-automation-id="formField-${id}"><fieldset><legend>${label}${r ? req : ''}</legend><div data-automation-id=dateInputWrapper>${ps.map(p => part(id, p)).join('')}</div></fieldset></div>`;
+const R = (n, label, r) => `<div data-automation-id="formField-${n}"><fieldset><legend>${label}${r ? req : ''}</legend><div><input type=radio name="${n}" id="${n}y" value=true><label for="${n}y">Yes</label></div><div><input type=radio name="${n}" id="${n}n" value=false><label for="${n}n">No</label></div></fieldset></div>`;
+const C = (id, label, r) => `<div data-automation-id="formField-${id}"><input type=checkbox id="${id}" ${r ? 'aria-required=true' : ''}><label for="${id}">${label}${r ? req : ''}</label></div>`;
+const foot = () => `<div data-automation-id=pageFooter><button type=button data-automation-id=pageFooterBackButton>Back</button><button type=button data-automation-id=pageFooterNextButton>${at < 5 ? 'Save and Continue' : 'Submit'}</button></div>`;
+const bar = () => `<ol data-automation-id=progressBar>${NAMES.map((n, i) => `<li data-automation-id="progressBar${i == at ? 'Active' : i < at ? 'Completed' : 'Inactive'}Step"><label>${i == at ? 'current ' : ''}step ${i + 1} of 6</label><div>${n}</div></li>`).join('')}</ol>`;
+const SIGNIN = `<div data-automation-id=signInContent><label for=em>Email</label><input id=em data-automation-id=email><label for=pw>Password</label><input id=pw type=password><input type=text data-automation-id=beecatcher name=website><button type=button id=in>Sign In</button></div>`;
+const PAGES = [
+  () => `<div id=si><button type=button data-automation-id=GoogleSignInButton>Sign in with Google</button><button type=button data-automation-id=SignInWithEmailButton>Sign in with email</button></div>`,
+  () => `<div data-automation-id=applyFlowMyInfoPage>${M('source', 'How Did You Hear About Us?', { 'Social Media': ['LinkedIn'], 'Website': ['Company Careers Website', 'Other Website'] }, 1)}${R('prev', 'Have you previously worked for Globex?', 1)}${D('country', 'Country', ['United Kingdom', 'Singapore'], 1, 'United Kingdom')}${T('fn', 'Given Name(s)', 1)}${T('ln', 'Family Name', 1)}${C('pref', 'I have a preferred name')}${T('a1', 'Address Line 1', 1)}${T('city', 'City', 1)}${T('pc', 'Postal Code', 1)}${D('pt', 'Phone Device Type', ['Landline', 'Mobile'], 1)}${M('cc', 'Country Phone Code', { 'France (+33)': 0, 'United Kingdom (+44)': 0 }, 1, 'France (+33)')}${T('ph', 'Phone Number', 1)}${T('ext', 'Phone Extension')}</div>`,
+  () => `<div data-automation-id=applyFlowMyExpPage><div role=group aria-labelledby=Work-Experience-section><h4 id=Work-Experience-section>Work Experience</h4><div id=works></div><button type=button data-automation-id=add-button data-k=work>Add</button></div>
+    <div role=group aria-labelledby=Education-section><h4 id=Education-section>Education</h4><div id=edus></div><button type=button data-automation-id=add-button data-k=edu>Add</button></div>
+    <div role=group aria-labelledby=Skills-section><h4 id=Skills-section>Skills</h4><div data-automation-id=formField-skills><div data-automation-id=multiSelectContainer data-uxi-widget-type=multiselect data-many=1 data-enter=1 data-opts='{"Python":0,"SQL":0,"Rust":0}'><ul></ul><input id=skills placeholder=Search type=text></div></div></div>
+    <div role=group aria-labelledby=Resume/CV-section><h4 id=Resume/CV-section>Resume/CV</h4><div data-automation-id=file-upload-drop-zone><button type=button data-automation-id=select-files>Select files</button></div><input data-automation-id=file-upload-input-ref type=file style="display:none"><div id=items></div></div></div>`,
+  () => `<div>${D('q1', 'Will you require sponsorship?', ['Yes', 'No'], 1)}<div id=more></div>${F('q2', 'Why Globex?', '<textarea id=q2 aria-required=true></textarea>', 1)}${DT('q3', 'When can you start?', 1, ['Day', 'Month', 'Year'])}</div>`,
+  () => `<div data-automation-id=applyFlowVoluntaryDisclosuresPage>${D('gen', 'Gender', ['Man', 'Woman'], 0)}${C('terms', 'I consent to the terms and conditions', 1)}</div>`,
+  () => `<div data-automation-id=applyFlowReviewPage>Review everything<button type=button data-automation-id=edit>Edit</button></div>`,
+];
+const keep = () => { document.querySelectorAll('#root input:not([type=file]), #root textarea, #root button[aria-haspopup]').forEach(e => { if (e.id) saved[e.id] = e.type == 'radio' || e.type == 'checkbox' ? e.checked : e.tagName == 'BUTTON' ? e.innerText : e.value; });
+  document.querySelectorAll('#root [data-automation-id=multiSelectContainer]').forEach(m => saved[m.querySelector('input').id] = [...m.querySelectorAll('[data-automation-id=selectedItem]')].map(x => x.innerText.trim())); };
+function show() {
+  close();
+  if (at < 0) { root.innerHTML = '<h2>Software Engineer Intern</h2><a href="#" role=button data-automation-id=adventureButton>Apply</a><div id=modal></div>'; return; }
+  root.innerHTML = bar() + '<h2>' + NAMES[at] + '</h2><p>Loading</p>' + (at ? foot() : '');
+  setTimeout(() => { root.innerHTML = bar() + '<div id=errs></div><h2>' + NAMES[at] + '</h2>' + PAGES[at]() + (at ? foot() : ''); }, at ? 900 : 2500);
+}
+const close = () => portal.innerHTML = '';
+function list(m, q) {
+  const o = JSON.parse(m.dataset.opts), many = m.dataset.many;
+  const pick = t => { if (!many) m.querySelector('ul').innerHTML = ''; m.querySelector('ul').insertAdjacentHTML('beforeend', `<li data-automation-id=selectedItem><p data-automation-id=promptOption>${t}</p></li>`); close(); m.querySelector('input').value = ''; };
+  const draw = names => { portal.innerHTML = '<div class=popup data-automation-id=activeListContainer role=listbox></div>'; names.forEach(t => { const d = document.createElement('div'); d.role = 'option'; d.setAttribute('aria-setsize', many ? 900 : names.length); d.innerHTML = `<div data-automation-id=promptOption data-automation-label="${t}">${t}</div>`; d.onclick = () => o[t] ? draw(o[t]) : pick(t); if (o[t]) d.onclick = () => { const kids = o[t]; portal.firstChild.innerHTML = ''; kids.forEach(k => { const e = document.createElement('div'); e.role = 'option'; e.innerHTML = `<div data-automation-id=promptOption data-automation-label="${k}">${k}</div>`; e.onclick = () => pick(k); portal.firstChild.append(e); }); }; portal.firstChild.append(d); }); };
+  const hit = Object.keys(o).filter(t => t.toLowerCase().includes((q || '').toLowerCase()));
+  if (many && q === undefined) return draw(['Accounting']);
+  if (many && hit.length == 1) return pick(hit[0]);
+  draw(hit);
+}
+document.addEventListener('click', e => {
+  const t = e.target, id = t.dataset.automationId;
+  if (id == 'adventureButton') { e.preventDefault(); modal.innerHTML = '<a href="#" role=button data-automation-id=autofillWithResume>Autofill with Resume</a><a href="#" role=button data-automation-id=applyManually>Apply Manually</a>'; }
+  else if (id == 'applyManually') { e.preventDefault(); at = 0; show(); }
+  else if (id == 'SignInWithEmailButton') si.innerHTML = SIGNIN;
+  else if (t.id == 'in') { at = 1; signed = true; show(); }
+  else if (id == 'pageFooterBackButton') { keep(); at--; show(); }
+  else if (id == 'pageFooterNextButton') {
+    if (at == 5) return submits++;
+    presses++;
+    if (reject) { reject = false; errs.innerHTML = '<div data-automation-id=errorHeading><ol><li>Error - Phone Number is not valid</li></ol></div>'; return; }
+    if (at == 4 && !terms.checked) { errs.innerHTML = '<div data-automation-id=errorHeading><ol><li>Error - terms</li></ol></div>'; return; }
+    keep(); at++; show(); }
+  else if (id == 'add-button') { const k = t.dataset.k, n = ++adds[k], sec = k == 'work' ? 'Work Experience' : 'Education', pid = `${sec.replace(/ /g, '-')}-${n}-panel`, p = `${k}-${n}`;
+    (k == 'work' ? works : edus).insertAdjacentHTML('beforeend', `<div role=group aria-labelledby="${pid}"><h5 id="${pid}">${sec} ${n}</h5><button type=button>Delete</button>` + (k == 'work' ?
+      T(p + '--jobTitle', 'Job Title', 1) + T(p + '--companyName', 'Company', 1) + T(p + '--location', 'Location') + C(p + '--current', 'I currently work here') + DT(p + '--startDate', 'From', 1) + `<div id="${p}-to">` + DT(p + '--endDate', 'To', 1) + '</div>' + F(p + '--desc', 'Role Description', `<textarea id="${p}--desc"></textarea>`)
+      : T(p + '--school', 'School or University', 1) + D(p + '--degree', 'Degree', ['Bachelors', 'Masters'], 1) + `<div data-automation-id=formField-fos><label for="${p}--fos">Field of Study</label><div data-automation-id=multiSelectContainer data-uxi-widget-type=multiselect data-many=1 data-slow=2500 data-opts='{"Computer and Information Science":0,"Computer Science and Mathematics":0,"Computer Engineering":0}'><ul></ul><input id="${p}--fos" placeholder=Search type=text></div></div>` + DT(p + '--from', 'From', 0, ['Year']) + DT(p + '--to', 'To (Actual or Expected)', 0, ['Year'])) + '</div>');
+    t.innerText = 'Add Another'; }
+  else if (t.id == 'terms' || t.type == 'radio') return;
+  else if (/--current$/.test(t.id)) document.getElementById(t.id.replace('--current', '-to')).style.display = t.checked ? 'none' : '';
+  else if (t.matches('button[aria-haspopup=listbox]')) { portal.innerHTML = `<ul role=listbox id=lb>${['Select One', ...t.dataset.opts.split('|')].map(o => `<li role=option>${o}</li>`).join('')}</ul>`; t.setAttribute('aria-controls', 'lb'); lb.onclick = x => { t.innerText = x.target.innerText; t.removeAttribute('aria-controls'); close(); if (t.id == 'q1') more.innerHTML = x.target.innerText == 'Yes' ? F('q1b', 'Which visa do you hold?', '<input id=q1b aria-required=true>', 1) : ''; }; e.stopPropagation(); }
+  else if (t.closest('[data-automation-id=multiSelectContainer]') && t.tagName == 'INPUT') list(t.closest('[data-automation-id=multiSelectContainer]'));
+});
+document.addEventListener('keydown', e => { if (e.key == 'Escape') { close(); document.querySelectorAll('[aria-controls=lb]').forEach(b => b.removeAttribute('aria-controls')); }
+  const m = e.target.closest('[data-automation-id=multiSelectContainer]'); if (m && e.key == 'Enter') { const q = e.target.value; if (m.dataset.slow) { close(); setTimeout(() => list(m, q), +m.dataset.slow); } else list(m, q); } });
+document.addEventListener('change', e => { if (e.target.type == 'file') { const n = e.target.files[0].name; items.insertAdjacentHTML('beforeend', `<div data-automation-id=file-upload-item><span data-automation-id=file-upload-item-name>${n}</span></div>`); e.target.value = ''; } });
+show();
+</script>

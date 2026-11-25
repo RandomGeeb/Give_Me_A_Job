@@ -2,10 +2,12 @@ from datetime import date
 
 from ..llm import client, prompts
 from ..llm.schemas import Answers, CoverLetter, TailoredCV
+from ..apply import policy
 from ..apply.fields import match_option
 from .parse import context
 
 MAX_OPTIONS = 80
+KINDS = {"dropdown": "select", "multiselect": "select", "dateparts": "date"}
 
 
 def job_block(job: dict) -> str:
@@ -41,15 +43,18 @@ def cover_letter(job, cv, profile, research=(), notes="", prev=None, issues=None
     return "\n\n".join(p.text.strip() for p in out.paragraphs), [f["id"] for f in research if f["id"] in cited]
 
 
-def draft_answers(job, cv, profile, fields: list[dict], prev=None, issues=None) -> dict[str, dict]:
-    """fields: [{key,label,kind,required,options}] already cleared by apply.policy."""
+def draft_answers(job, cv, profile, fields: list[dict], prev=None, issues=None, others=()) -> dict[str, dict]:
+    """others: roles at this employer already applied for. fields: [{key,label,kind,required,options}] already cleared by apply.policy."""
     if not fields:
         return {}
     ids = {f"f{i}": f for i, f in enumerate(fields)}
-    form = [{"id": i, "question": f["label"], "kind": f["kind"], "required": f["required"],
+    form = [{"id": i, "question": f["label"], "kind": KINDS.get(f["kind"], f["kind"]), "required": f["required"],
              "options": f["options"] if len(f["options"]) <= MAX_OPTIONS else
-             ["(too many to list: give the usual full name and it will be matched)"]} for i, f in ids.items()]
-    msg = job_block(job) + "\n\n" + client.tag("form", form) + "\n\nPrepare the answers."
+             ["(too many to list: give the usual full name and it will be matched)"],
+             **({"options": ["(searched as you type: give the usual full name)"]} if f["kind"] == "multiselect" and not f["options"] else {}),
+             **({"max_characters": f["maxlength"]} if f.get("maxlength") else {})} for i, f in ids.items()]
+    msg = job_block(job) + "\n\n" + client.tag("other_applications", list(others) or "None to this employer so far.") + \
+        "\n\n" + client.tag("form", form) + "\n\nPrepare the answers."
     if prev:
         msg += "\n\n" + client.tag("previous_version", prev) + _fix(issues)
     res = client.call("answers", prompts.ANSWER, context(cv, profile), msg, Answers, effort="medium", job_id=job["id"])
@@ -57,9 +62,9 @@ def draft_answers(job, cv, profile, fields: list[dict], prev=None, issues=None) 
     for a in res.answers:
         f = ids.get(a.field)
         if f:
-            out[f["key"]] = clean(f, a.model_dump())
+            out[f["key"]] = {**clean(f, a.model_dump()), "tried": True}
     for f in fields:
-        out.setdefault(f["key"], {"value": [], "basis": "unknown", "note": "No answer returned."})
+        out.setdefault(f["key"], {"value": [], "basis": "unknown", "note": "No answer returned.", "tried": True})
     return out
 
 
@@ -68,10 +73,14 @@ def clean(f: dict, a: dict) -> dict:
     val = [v for v in a["value"] if v.strip()]
     if a["basis"] == "unknown":
         val = []
+    if a["basis"] == "guess" and policy.LEGAL.search(f.get("label", "")):
+        return {"value": [], "basis": "unknown", "note": "A statement only you can make: answer it yourself."}
+    if f["kind"] == "multiselect":
+        val = val[:1]
     if len(f["options"]) > MAX_OPTIONS:
         val = [m for v in val[:1] if (m := match_option(v, f["options"]))]
     elif f["options"]:
-        ok = [v for v in val if v in f["options"]]
+        ok = [m for v in val if (m := v if v in f["options"] else match_option(v, f["options"]))]
         if len(ok) != len(val):
             return {"value": [], "basis": "unknown", "note": "Suggested option is not on the form."}
         val = ok if f["kind"] == "checkbox" else ok[:1]

@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { Link } from 'react-router-dom'
 import { api, day, Job, Likelihood, range, STATUS, useApi } from '../api'
-import { Deadline, Empty, Err, Rating, useAction } from '../components/ui'
+import { Deadline, Empty, Err, LimitPill, Rating, useAction } from '../components/ui'
 
 const COLS: [string, string[]][] = [['Shortlisted', ['shortlisted', 'tailoring']], ['Review', ['needs_review']], ['Ready to send', ['approved', 'filling']],
   ['Submitted', ['submitted']], ['Assessment', ['assessment']], ['Interview', ['interview']], ['Offer', ['offer']]]
@@ -19,7 +19,7 @@ export default function Pipeline() {
   const lk = (j: Job) => j.band && ins ? ins.likelihood.bands[j.band] : null
   const move = (id: number, to: string) => act.run('move', async () => { await api(`/jobs/${id}/move`, 'POST', { to }); await reload() })
   return <>
-    <header className="page"><div><h2>Pipeline</h2><p className="muted">{applied} applied, {jobs.filter(j => j.status === 'interview').length} interviewing, {jobs.filter(j => j.status === 'offer').length} offers</p></div>
+    <header className="page"><div><h2>Pipeline</h2><p className="muted"><Link to="/applied">{applied} applied</Link>, {jobs.filter(j => j.status === 'interview').length} interviewing, {jobs.filter(j => j.status === 'offer').length} offers</p></div>
       <div className="seg" role="group" aria-label="View"><button aria-pressed={view === 'board'} onClick={() => setView('board')}>Board</button><button aria-pressed={view === 'table'} onClick={() => setView('table')}>Table</button></div></header>
     <Err e={act.error} close={act.clear} />
     {active.length === 0 ? <Empty title="Nothing shortlisted yet">Pick roles on <Link to="/discover">Discover</Link> to start an application.</Empty> :
@@ -28,7 +28,7 @@ export default function Pipeline() {
         return <section key={name} className="col"><h3>{name}<span>{js.length}</span></h3>{js.map(j => {
           const l = lk(j)
           return <article key={j.id} className="card"><Link to={`/job/${j.id}`}><strong>{j.company}</strong><span>{j.title}</span></Link>
-            <div className="meta"><Rating j={j} /><Deadline d={j.deadline} /></div>
+            <div className="meta"><Rating j={j} /><Deadline d={j.deadline} />{j.limit?.state !== 'sent' && <LimitPill l={j.limit} />}</div>
             {l && <p className="small muted">Interview {range(l.interview)}, offer {range(l.offer)}</p>}
             {j.task?.running && <p className="small">Working: {j.task.kind}…</p>}{j.task?.error && <p className="small due">{j.task.error}</p>}
             {j.next_action && <p className="small">Next: {j.next_action}</p>}

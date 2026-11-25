@@ -1,5 +1,5 @@
 import { ReactNode, useState } from 'react'
-import { daysTo, day } from '../api'
+import { daysTo, day, Limit } from '../api'
 
 export const TIER: Record<number, [string, string]> = { 1: ['1', 'Best chance'], 2: ['2', 'Possible'], 3: ['3', 'Long shot'], 4: ['4', 'Out of scope'] }
 export const Tier = ({ t }: { t: number | null }) => t ? <span className={`tier t${t}`} title={TIER[t][1]} aria-label={`Tier ${t}, ${TIER[t][1]}`}>{t}</span> : <span className="muted small">Not rated</span>
@@ -13,6 +13,13 @@ export const Deadline = ({ d }: { d: string | null }) => {
   const n = daysTo(d)
   return <span className={n < 0 ? 'muted' : n <= 7 ? 'due' : ''}>{n < 0 ? `Closed ${day(d)}` : n === 0 ? 'Closes today' : n <= 7 ? `${n} day${n > 1 ? 's' : ''} left` : `Closes ${day(d)}`}</span>
 }
+export const per = (days: number) => days === 365 ? 'per recruitment cycle' : days < 60 ? `in any ${days} days` : `in any ${Math.round(days / 30.5)} months`
+/** A short flag for roles at employers that limit applications. */
+export const LimitPill = ({ l }: { l: Limit }) => {
+  if (!l) return null
+  const [c, t] = l.state === 'reached' ? ['s-rejected', 'Limit reached'] : l.state === 'taken' ? ['s-rejected', `Limit ${l.n}, other role approved`] : l.state === 'pick' ? ['s-needs_review', `Pick ${l.left} of ${l.going}`] : ['', `Limit ${l.n}, ${l.used} used`]
+  return <span className={`pill ${c}`} title={`${l.n} application${l.n > 1 ? 's' : ''} ${per(l.days)}. ${l.quote}`}>{t}</span>
+}
 export type Usage = Record<string, { used: number | null; resets: number; at: number | null }>
 const WINDOW: Record<string, string> = { five_hour: '5-hour limit', seven_day: 'Weekly limit' }
 const when = (t: number) => { const d = new Date(t * 1000), time = d.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' }); return d.toDateString() === new Date().toDateString() ? time : `${d.toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short' })}, ${time}` }
@@ -21,9 +28,9 @@ export const PlanUse = ({ u, stop, bars }: { u?: Usage; stop?: number; bars?: bo
   const ks = Object.keys(WINDOW).filter(k => u?.[k])
   if (!u || !ks.length) return <p className="small muted">Claude plan use appears after the first call.</p>
   return <div className="use">{ks.map(k => { const w = u[k]; return <div key={k}>
-    <p><b>{WINDOW[k]}</b> {w.used === null ? `reset ${when(w.resets)}. Not used by the app since.` : `${Math.round(w.used * 100)}% used, resets ${when(w.resets)}`}</p>
+    <p><b>{WINDOW[k]}</b> {w.used === null ? `reset ${when(w.resets)}. Not used by the app since.` : `${Math.round(w.used * 100)}% used, resets ${when(w.resets)}`}{w.used !== null && w.at && <span className="muted"> (read {when(w.at)})</span>}</p>
     {bars && <div className="prog slim" role="progressbar" aria-label={WINDOW[k]} aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round((w.used ?? 0) * 100)}><i style={{ width: `${Math.min(1, w.used ?? 0) * 100}%` }} />{stop && stop < 100 ? <em style={{ left: `${stop}%` }} title={`The app stops at ${stop}%`} /> : null}</div>}</div> })}
-    {bars && <p className="small muted">{stop ? `The app stops at ${stop}%. ` : ''}Figures are from the app's last Claude call, so other Claude use since then is not included.</p>}</div>
+    {bars && <p className="small muted">{stop ? `The app stops at ${stop}%. ` : ''}This is your whole Claude account, including chats and Claude Code, and it updates only when the app makes a call.</p>}</div>
 }
 export const Err = ({ e, close }: { e: string | null; close?: () => void }) => e ? <div className="error" role="alert"><span>{e}</span>{close && <button className="plain" onClick={close}>Dismiss</button>}</div> : null
 

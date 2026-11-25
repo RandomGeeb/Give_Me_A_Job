@@ -23,9 +23,14 @@ def code_checks(job, cv, profile, app, pages: int | None) -> list[dict]:
     if app.get("cover_letter"):
         out += verify.check_letter(app["cover_letter"], cv, profile, job, app.get("research") or (), app.get("letter_notes") or "")
     for a in (app.get("answers") or {}).values():
-        if needs_check(a):
-            out += verify.check_prose(f"Answer: {a['label'][:60]}", " ".join(a["value"]), cv, profile, job)
+        out += answer_checks(job, cv, profile, a)
     return out
+
+
+def answer_checks(job, cv, profile, a: dict) -> list[dict]:
+    if not needs_check(a):
+        return []
+    return verify.check_prose(f"Answer: {a['label'][:60]}", " ".join(a["value"]), cv, profile, job)
 
 
 REUSED = (' The CV was written for a similar role. If it leaves out an essential requirement of this posting that the facts support, '
@@ -37,7 +42,7 @@ def ai_review(job, cv, profile, app, reused: bool = False) -> dict:
     final = {"cv": [{"entry": entries[e["entry_id"]]["title"], "organisation": entries[e["entry_id"]]["organisation"],
                      "bullets": [b["text"] for b in e["bullets"]]} for e in app["cv"]["entries"] if e["entry_id"] in entries],
              "skills": app["cv"]["skills"], "cover_letter": app.get("cover_letter") or "",
-             "answers": [{"question": a["label"], "answer": a["value"]} for a in (app.get("answers") or {}).values()
+             "answers": [{"question": a["label"], "answer": a["value"], **({"guess": True} if a["basis"] == "guess" else {})} for a in (app.get("answers") or {}).values()
                          if a["value"] and a["basis"] != "contact"]}
     r = client.call("review", prompts.REVIEW, context(cv, profile),
                     job_block(job) + "\n\n" + client.tag("company_research", [{k: f[k] for k in ("id", "quote", "published")} for f in app.get("research") or []])
@@ -57,8 +62,9 @@ def content_hash(app: dict) -> str:
     """Covers everything that will be sent, including the PDF bytes."""
     pdf = Path(app["pdf_path"]) if app.get("pdf_path") else None
     body = {"cv": app.get("cv"), "cover": app.get("cover_letter") or "",
-            # Contact details come from the profile at fill time, so they are not part of the approved text.
-            "answers": {k: a["value"] for k, a in (app.get("answers") or {}).items() if a["value"] and a["basis"] != "contact"},
+            # Contact details come from the profile at fill time, so they are not part of the approved text. Nor are answers
+            # written while filling: you check those on the form itself, before you submit.
+            "answers": {k: a["value"] for k, a in (app.get("answers") or {}).items() if a["value"] and a["basis"] != "contact" and not a.get("on_form")},
             "pdf": hashlib.sha256(pdf.read_bytes()).hexdigest() if pdf and pdf.exists() else ""}
     return hashlib.sha256(json.dumps(body, sort_keys=True).encode()).hexdigest()
 
